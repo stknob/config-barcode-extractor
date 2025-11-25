@@ -1,0 +1,17 @@
+{
+  "name": "config-barcode-extractor",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "debug": "node index.mjs -p 23 ds2208-prg-en.pdf"
+  },
+  "devDependencies": {
+    "bwip-js": "^4.8.0",
+    "canvas": "^3.2.0",
+    "node-poppler": "^9.0.1",
+    "rxing-wasm": "^0.5.3",
+    "tesseract.js": "^6.0.1",
+    "yargs": "^18.0.0",
+    "zxing-wasm": "^2.2.4"
+  }
+}
