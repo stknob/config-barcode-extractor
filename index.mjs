@@ -69,6 +69,10 @@ const seq = (start, end) => {
 };
 
 const excludedPages = ((param) => {
+	const result = new Set();
+	if (param == null || param.length <= 0)
+		return result;
+
 	return param.split(',').reduce((res, item) => {
 		const tmp = item.split('-', 2);
 		switch (tmp.length) {
@@ -84,7 +88,7 @@ const excludedPages = ((param) => {
 			break;
 		}}
 		return res;
-	}, new Set());
+	}, result);
 })(argv.excludePages);
 
 const lcFirst = (value) => {
