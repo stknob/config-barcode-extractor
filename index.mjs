@@ -216,6 +216,99 @@ const rxingDetectBarcodes = async (page) => {
 	});
 };
 
+/**
+ * @typedef {object} Point
+ * @property {number} x
+ * @property {number} y
+ */
+
+const CardinalDirection = Object.freeze({
+	NORTH: 0x1,
+	SOUTH: 0x2,
+	WEST:  0x4,
+	EAST:  0x8,
+});
+
+class BboxUtils {
+	/**
+	 * Get center point of bbox
+	 * @param {Bbox} bbox
+	 * @returns {Point}
+	 */
+	static bboxCenterPoint(bbox) {
+		return {
+			x: bbox.x0 + ((bbox.x1 - bbox.x0) >>> 1),
+			y: bbox.y0 + ((bbox.y1 - bbox.y0) >>> 1),
+		};
+	}
+
+	/**
+	 * Calculate center point distance between two bounding boxes
+	 * @param {Bbox} bboxA
+	 * @param {Bbox} bboxB
+	 * @returns {number} The center point distance in pixels
+	 */
+	static bboxCenterDistance(bboxA, bboxB) {
+		const { x: ax, y: ay } = BboxUtils.bboxCenterPoint(bboxA);
+		const { x: bx, y: by } = BboxUtils.bboxCenterPoint(bboxB);
+
+		if (ax === bx)
+			return Math.abs(ay - by);
+		else if (ay === by)
+			return Math.abs(ax - bx);
+		else {
+			// pythagoras, i summon you
+			const deltaX = ax - bx, deltaY = ay - by;
+			return Math.sqrt((deltaX * deltaX) + (deltaY * deltaY));
+		}
+	}
+
+	/**
+	 * Check whether bboxB is inside bboxA
+	 * @param {Bbox} bboxA
+	 * @param {Bbox} bboxB
+	 * @returns {boolean}
+	 */
+	static bboxInsideOther(bboxA, bboxB) {
+		return bboxB.x0 >= bboxA.x0 && bboxB.x1 <= bboxA.x1 && bboxB.y0 >= bboxA.y0 && bboxB.y1 <= bboxA.y1;
+	}
+
+	/**
+	 * Convert barcode outline into a bbox
+	 * @param {any} barcode
+	 * @returns {Bbox}
+	 */
+	static bboxFromBarcode(barcode) {
+		return Object.freeze({
+			x0: barcode.position.topLeft.x,
+			y0: barcode.position.topLeft.y,
+			x1: barcode.position.bottomRight.x,
+			y1: barcode.position.bottomRight.y,
+		});
+	}
+
+	/**
+	 * Detect in which cardinal direction bboxB is in relation to bboxA
+	 * @param {*} bboxA
+	 * @param {*} bboxB
+	 */
+	static bboxDirectionOf(bboxA, bboxB) {
+		const centerA = this.bboxCenterPoint(bboxA);
+		const centerB = this.bboxCenterPoint(bboxB);
+
+		// Calculate angle between both center points
+		const radians = Math.atan2((centerA.y - centerB.y), (centerA.x - centerB.x));
+		if (radians >= 5.495 || radians < 0.785)
+			return CardinalDirection.EAST;
+		else if (radians >= 0.785 && radians < 2.355)
+			return CardinalDirection.NORTH;
+		else if (radians >= 2.355 && radians < 3.925)
+			return CardinalDirection.WEST;
+		else if (radians >= 3.925 && radians < 5.495)
+			return CardinalDirection.SOUTH;
+	}
+}
+
 if (argv.strict) {
 	console.log(`Running in strict mode, using rxing-wasm to attempt a perfect recreation of barcodes...`);
 }
@@ -265,6 +358,19 @@ try {
 				const ocrResult = (await tessWorker1.recognize(page, {}, { text: true, blocks: true }))?.data;
 				const pageTextBlocks = ocrResult?.blocks || [];
 				const pageText = ocrResult?.text ?? '';
+
+				// Convert into a list of text lines
+				const pageTextLines = pageTextBlocks.reduce((res, block) => {
+					for (const paragraph of block.paragraphs) {
+						for (const line of paragraph.lines) {
+							res.push({
+								text: line.text,
+								bbox: line.bbox,
+							});
+						}
+					}
+					return res;
+				}, []);
 
 				// Extract original barcodes and attempt to regenerate them from the detected data
 				const extractedPageBarcodes = [];
@@ -431,8 +537,41 @@ try {
 						// Extract original barcode into image file (for now) and for embedding
 						const barcodeImageBytes = await writeBarcodeImage(pageCtx, barcode, path.join(tempDir, `barcode-${pageId}-${idx}-org.png`));
 
+						/**
+						 * Label detection
+						 */
+						let label = ((barcode, textLines) => {
+							const barcodeBbox = BboxUtils.bboxFromBarcode(barcode);
+							const minDistance = Math.min((barcodeBbox.x1 - barcodeBbox.x0) >>> 1, (barcodeBbox.y1 - barcodeBbox.y0) >>> 1);
+							const maxDistance = Math.max(pageCanvas.width, pageCanvas.height) * 0.25;
+
+							const candidates = [];
+							for (const line of textLines) {
+								let distance = BboxUtils.bboxCenterDistance(barcodeBbox, line.bbox);
+								if (distance >= maxDistance || distance <= minDistance || BboxUtils.bboxInsideOther(barcodeBbox, line.bbox))
+									continue;
+
+								// Slightly punish text lines that are above the barcode, as the label is usually either below or left/right of it
+								if (BboxUtils.bboxDirectionOf(barcodeBbox, line.bbox) === CardinalDirection.NORTH) {
+									if (argv.debug) console.log(`Giving 10% debuff to text line '${line.text.trim()}' above barcode`);
+									distance += distance * 0.1;	// Add 10% "debuff" to favor others
+								}
+
+								candidates.push({
+									...line,
+									distance,
+								});
+							}
+
+							// Get entry with lowest distance
+							const selected = candidates.sort((a, b) => a.distance - b.distance).at(0);
+							// console.log(`Selected label for barcode '${barcode.text}':`, selected, candidates);
+							return selected?.text?.trim();
+						})(barcode, pageTextLines);
+
+
 						extractedPageBarcodes.push({
-							...barcode, strict,
+							...barcode, strict, label,
 							format: barcodeFormat,
 							sourcePng: barcodeImageBytes,
 							barcodeSvg: bwipBarcodeSvg,	// Use bwip-js for now (both suck at QR, bwip-js wins for datamatrix)
@@ -443,24 +582,11 @@ try {
 
 				pageResults[`page:${pageId}`] = Object.freeze({
 					id: pageId, file: pageFile, text: pageText,
-					textLines: pageTextBlocks.reduce((res, block) => {
-						const paras = block.paragraphs.reduce((res1, para) => {
-							const lines = para.lines.map((line) => {
-								return {
-									text: line.text,
-									bbox: line.bbox,
-								};
-							});
-							res1.push(...lines);
-							return res1;
-						}, []);
-						res.push(...paras);
-						return res;
-					}, []),
 					barcodes: extractedPageBarcodes.map((item) => {
 						return {
 							text: item.text,
 							data: Buffer.from(item.bytes)?.toString('base64'),
+							label:  item.label,
 							format: item.format,
 							source: item.sourcePng?.toString('base64'),
 							strict: item.strict,	// Strict / faithful reproduction has been attempted, generated barcode should match original (only code128 and datamatrix)
@@ -468,14 +594,10 @@ try {
 								png: item.barcodePng?.toString('base64'),
 								svg: item.barcodeSvg,
 							},
-							bbox: {
-								x0: item.position.topLeft.x,
-								y0: item.position.topLeft.y,
-								x1: item.position.bottomRight.x,
-								y1: item.position.bottomRight.y,
-							},
+							bbox: BboxUtils.bboxFromBarcode(item),
 						};
 					}),
+					textLines: pageTextLines,
 				});
 			}
 
