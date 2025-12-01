@@ -10,7 +10,6 @@
     "canvas": "^3.2.0",
     "node-poppler": "^9.0.1",
     "rxing-wasm": "^0.5.3",
-    "tesseract.js": "^6.0.1",
     "yargs": "^18.0.0",
     "zxing-wasm": "^2.2.4"
   }
