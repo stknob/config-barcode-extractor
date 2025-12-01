@@ -2,7 +2,8 @@
  * Various utility classed and functions
  *
  */
-import { createCanvas } from 'canvas';
+import fs from 'node:fs/promises';
+import { CanvasRenderingContext2D, createCanvas } from 'canvas';
 
 export const ptsToPixel = (pts) => pts * 0.75;
 export const pixelToPts = (px)  => px  * 1.33;
@@ -11,13 +12,13 @@ export const pixelToPts = (px)  => px  * 1.33;
 /**
  *
  * @param {CanvasRenderingContext2D} srcCtx
- * @param {object} barcode
+ * @param {Bbox} bbox Barcode bbox
  * @param {string?} outfile
  * @returns {Promise<Uint8Array>}
  */
-export const writeBarcodeImage = async (srcCtx, barcode, outfile) => {
+export const writeBarcodeImage = async (srcCtx, bbox, outfile) => {
 	const padding = 5;
-	const imageData = getBarcodeImageData(srcCtx, barcode);
+	const imageData = getBarcodeImageData(srcCtx, bbox);
 	const w = imageData.width + (padding << 1);
 	const h = imageData.height + (padding << 1);
 
@@ -49,14 +50,25 @@ export const writeImage = async (srcCtx, outfile) => {
 /**
  *
  * @param {CanvasRenderingContext2D} srcCtx
- * @param {object} barcode
- * @returns {ImageData}
+ * @param {Bbox} bbox Barcode bounding box
+ * @returns {Image}
  */
-export const getBarcodeImageData = (srcCtx, barcode) => {
-	const { x, y } = barcode.position.topLeft;
-	const w = barcode.position.bottomRight.x - x;
-	const h = barcode.position.bottomRight.y - y;
-	return srcCtx.getImageData(x, y, w, h);
+export const getBarcodeImageData = (srcCtx, bbox, options = { padding: 5 }) => {
+	const sw = bbox.x1 - bbox.x0, sh = bbox.y1 - bbox.y0;
+	const sx = bbox.x0, sy = bbox.y0;
+
+	const padding = options?.padding ?? 0;
+	const dw = sw + (padding << 1);
+	const dh = sw + (padding << 1);
+
+	// Transfer pixels into destination canvas
+	const ctx = createCanvas(dw, dh).getContext('2d');
+	ctx.fillStyle = '#ffffff';
+	ctx.fillRect(0, 0, dw, dh);
+
+	const imageData = srcCtx.getImageData(sx, sy, sw, sh);
+	ctx.putImageData(imageData, padding, padding);
+	return ctx.getImageData(0, 0, dw, dh);
 };
 
 

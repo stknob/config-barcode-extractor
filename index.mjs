@@ -11,7 +11,7 @@ import * as zxing from 'zxing-wasm';
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 
-import { rxingDetectBarcodes } from './src/rxing.mjs';
+import { rxingDetectBarcode } from './src/rxing.mjs';
 import { BwipBarcodeRenderer } from './src/bwip.mjs';
 import {
 	ArgumentUtils,
@@ -225,25 +225,6 @@ try {
 					console.info(`Processing page '${pageId}' with ${pageBarcodes.length} barcodes...`);
 				}
 
-				/**
-				 * Strict mode: Reprocess barcodes on the page with rxing, which still allows
-				 * us to get the raw bytes of a barcode (and not just the content), this can be
-				 * used to create perfect reconstructions of code128 and datamatrix barcodes
-				 *
-				 * @todo Instead of re-scanning the whole page, run rxing on individual extracted
-				 *       code128/datamatrix codes, which should be a lot faster
-				 */
-				const rxingBarcodeFormats = ["code128", "datamatrix"];
-				if (argv.strict && pageBarcodes.some((item) => rxingBarcodeFormats.includes(item.format.toLowerCase()))) {
-					if (argv.debug) console.debug(`Reprocessing page '${pageId}' with rxing-wasm to extract raw bytes...`);
-					// Run the same page through rxing-wasm to get the raw bytes for each barcode
-					const rxingBarcodes = (await rxingDetectBarcodes(page))
-						.reduce((res, item) => res.set(item.text, item), new Map());
-
-					// Augment zxing-wasm detected barcodes with raw byte information from rxing-wasm
-					pageBarcodes.forEach((item) => item.rawBytes = rxingBarcodes?.get(item.text)?.bytes);
-				}
-
 				// Extract original barcodes and attempt to regenerate them from the detected data
 				const pageData = await loadImage(page).then(async (image) => {
 					const pageCanvas = createCanvas(image.width, image.height);
@@ -271,7 +252,15 @@ try {
 						});
 					})(pageId, fileInfo.page[pageId], pageCanvas, tsvTextLines);
 
-
+					/**
+					 * Strict mode: Reprocess barcodes on the page with rxing, which still allows
+					 * us to get the raw bytes of a barcode (and not just the content), this can be
+					 * used to create perfect reconstructions of code128 and datamatrix barcodes
+					 *
+					 * @todo Instead of re-scanning the whole page, run rxing on individual extracted
+					 *       code128/datamatrix codes, which should be a lot faster
+					 */
+					const rxingBarcodeFormats = ["code128", "datamatrix"];
 					for (const [idx, barcode] of pageBarcodes.entries()) {
 						const barcodeFormat = barcode.format.toLowerCase();
 						if (!barcode.isValid || barcodeFormat === 'databar' /* false positive */) {
@@ -280,7 +269,18 @@ try {
 						}
 
 						// Extract original barcode into image file (for now) and for embedding
-						const barcodeImageBytes = await writeBarcodeImage(pageCtx, barcode, argv.debug && path.join(tempDir, `barcode-${pageId}-${idx}-org.png`));
+						const barcodeBbox = BboxUtils.bboxFromBarcode(barcode);
+						const barcodeImageBytes = await writeBarcodeImage(pageCtx, barcodeBbox, argv.debug && path.join(tempDir, `barcode-${pageId}-${idx}-org.png`));
+
+						// Run the barcode image through rxing-wasm to get the raw bytes
+						if (argv.strict && rxingBarcodeFormats.includes(barcodeFormat)) {
+							if (argv.debug) console.debug(`Reprocessing page '${pageId}' with rxing-wasm to extract raw bytes...`);
+							barcode.rawBytes = (await rxingDetectBarcode(pageCtx, barcodeBbox))?.bytes;
+							if (argv.debug && barcode.rawBytes) {
+								console.debug(`rxing-wasm detected barcode bytes:`,
+									Buffer.from(barcode.rawBytes).toString('hex'));
+							}
+						}
 
 						/*
 						 * Re-render barcode into clean PNG and SVG images
@@ -316,22 +316,21 @@ try {
 						 * These lines are usually directly below the barcode, but can be to either side or above it
 						 * (Highly dependent on the PDFs overall quality...)
 						 */
-						let label = ((barcode, textLines) => {
-							const barcodeBbox = BboxUtils.bboxFromBarcode(barcode);
+						let label = ((barcode, bbox, textLines) => {
 							if (argv.debug) console.debug(`Detecting label of barcode '${barcode.text.trim()}'...`);
 
 							// Maximum center point distance: 25% of longest page dimension; minimum distance: nearest edge of barcode
-							const minDistance = Math.min((barcodeBbox.x1 - barcodeBbox.x0) >>> 1, (barcodeBbox.y1 - barcodeBbox.y0) >>> 1) * 1.00; // adjustment factor for tsv bbox conversion inaccuracies
+							const minDistance = Math.min((bbox.x1 - bbox.x0) >>> 1, (bbox.y1 - bbox.y0) >>> 1) * 1.00; // adjustment factor for tsv bbox conversion inaccuracies
 							const maxDistance = Math.max(pageCanvas.width, pageCanvas.height) * 0.25;  // adjustment factor increased (from 0.25 OCR) for tsv bbox conversion inaccuracies
 
 							const candidates = [];
 							for (const line of textLines) {
-								let distance = BboxUtils.bboxCenterDistance(barcodeBbox, line.bbox);
-								if (distance >= maxDistance || distance <= minDistance || BboxUtils.bboxInsideOther(barcodeBbox, line.bbox))
+								let distance = BboxUtils.bboxCenterDistance(bbox, line.bbox);
+								if (distance >= maxDistance || distance <= minDistance || BboxUtils.bboxInsideOther(bbox, line.bbox))
 									continue;
 
 								// Slightly punish text lines that are above the barcode, as the label is usually either below or left/right of it
-								const cardinalPosition = BboxUtils.bboxDirectionOf(barcodeBbox, line.bbox);
+								const cardinalPosition = BboxUtils.bboxDirectionOf(bbox, line.bbox);
 								if (cardinalPosition === CardinalDirection.NORTH) {
 									// if (argv.debug) console.debug(`Giving a 10% debuff to text line '${line.text.trim()}' above barcode`);
 									distance += distance * 0.1;	// Add 10% "debuff" to favor others
@@ -349,7 +348,7 @@ try {
 							// Return the entry with the lowest distance score
 							return candidates.sort((a, b) => a.distance - b.distance)
 								.at(0)?.text?.trim();
-						})(barcode, pageTsvLines);
+						})(barcode, barcodeBbox, pageTsvLines);
 
 
 						// Push processed barcode data onto the list, including the extract original image data as PNG,
