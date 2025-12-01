@@ -363,6 +363,7 @@ try {
 					}
 
 					return {
+						size: { width: image.width, height: image.height },
 						text: pageTsvLines.map((item) => item.text).join('\n'),
 						textLines: pageTsvLines,
 						barcodes: processedBarcodes,
@@ -370,7 +371,9 @@ try {
 				});
 
 				pageResults[`page:${pageId}`] = Object.freeze({
-					id: pageId, file: pageFile, text: pageData.text,
+					id: pageId, file: pageFile,
+					text: pageData.text,
+					size: pageData.size,
 					barcodes: pageData.barcodes.map((item) => {
 						return {
 							text: item.text,
