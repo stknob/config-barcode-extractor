@@ -274,7 +274,7 @@ try {
 
 						// Run the barcode image through rxing-wasm to get the raw bytes
 						if (argv.strict && rxingBarcodeFormats.includes(barcodeFormat)) {
-							if (argv.debug) console.debug(`Reprocessing page '${pageId}' with rxing-wasm to extract raw bytes...`);
+							if (argv.debug) console.debug(`Reprocessing page '${pageId}' barcode #${idx} (${barcodeFormat}: '${barcode.text.trim()}') with rxing-wasm to extract raw bytes...`);
 							barcode.rawBytes = (await rxingDetectBarcode(pageCtx, barcodeBbox))?.bytes;
 							if (argv.debug && barcode.rawBytes) {
 								console.debug(`rxing-wasm detected barcode bytes:`,
