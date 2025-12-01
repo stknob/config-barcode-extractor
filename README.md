@@ -3,5 +3,5 @@ Extracts configuration barcodes and surrounding text from barcode scanner manual
 attempts to regenerate them (as close as possble to the original) in SVG and PNG for
 further use.
 
-Uses zxing-wasm, rxing-wasm and tesseract.js under the hood.
+Uses poppler, zxing-wasm and rxing-wasm under the hood.
 Reimplementation of a now defunct C++ version.
