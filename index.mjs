@@ -370,6 +370,10 @@ try {
 					};
 				});
 
+				// Ignore result if no valid barcodes found
+				if (!Array.isArray(pageData.barcodes) || pageData.barcodes.length <= 0)
+					continue;
+
 				pageResults[`page:${pageId}`] = Object.freeze({
 					id: pageId, file: pageFile,
 					text: pageData.text,
