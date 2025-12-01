@@ -93,19 +93,8 @@ try {
 		const tempDir = await fs.mkdtemp('temp');
 
 		try {
-			const pageResults = {};
-
-			// Extract pages into PNG images
-			const popplerOutputFile = path.join(tempDir, 'page');
-			await poppler.pdfToCairo(file, popplerOutputFile, {
-				...extraPopplerOptions,
-				resolutionXYAxis: 150,	// Harcode this so we can scale TSV coordinates
-				monochromeFile: false,
-				scalePageTo: 1500,	// Going lower increases risk of not detecting (all) barcodes on a page
-				pngFile: true,
-			});
-
 			// Extract page dimensions and rotation (needed for TSV bbox rescaling)
+			console.info(`Reading and processing '${file}' metadata...`);
 			const fileInfo = await poppler.pdfInfo(file, {
 				...extraPopplerOptions,
 				firstPageToConvert: extraPopplerOptions.firstPageToConvert ?? -1,
@@ -150,15 +139,15 @@ try {
 			});
 
 			// Generate TSV text dump of PDF content
+			console.info(`Extracting and processing '${file}' text...`);
 			const tsvFile = path.join(tempDir, 'text.tsv');
-			await poppler.pdfToText(file, tsvFile, {
+			const tsvTextLines = await poppler.pdfToText(file, tsvFile, {
 				...extraPopplerOptions,
 				generateTsvFile: true,
-			});
-
-			// Read and postprocess TSV per-word data by merging it back into lines
-			const tsvTextLines = await (async (file) => {
-				return Array.from((await fs.readFile(file, { encoding: 'utf8' })).split('\n').reduce((res, line) => {
+			}).then(async () => {
+				// Read and postprocess TSV per-word data by merging it back into lines
+				const lines = await fs.readFile(tsvFile, { encoding: 'utf8' });
+				return Array.from(lines.split('\n').reduce((res, line) => {
 					const [level, pageNum, parNum, blockNum, lineNum, _wordNum, x, y, w, h, _conf, text] = line.split('\t', 12)
 						.map((val, idx, line) => idx <= line.length - 2 ? Number.parseFloat(val, 10) : val.trim());
 					if (Number.isNaN(level) || level <= 4) return res;
@@ -172,7 +161,6 @@ try {
 						entry.bbox.y1 = Math.max(entry.bbox.y1, y + h);
 					} else {
 						res.set(lineKey, {
-							// level,
 							page: pageNum,
 							// paragraph: parNum,
 							// block: blockNum,
@@ -198,13 +186,25 @@ try {
 						},
 					};
 				});
-			})(tsvFile);
+			});
+
+			// Extract pages into PNG images
+			console.info(`Converting ${fileInfo.pages} pages into PNG files (this may take a while)...`);
+			await poppler.pdfToCairo(file, path.join(tempDir, 'page'), {
+				...extraPopplerOptions,
+				resolutionXYAxis: 150,	// Harcode this so we can scale TSV coordinates
+				monochromeFile: false,
+				scalePageTo: 1500,	// Going lower increases risk of not detecting (all) barcodes on a page
+				pngFile: true,
+			});
 
 			// Set common file header
-			pageResults['common'] = {
-				file, strict: argv.strict ?? false,
-				timestamp: new Date().toISOString(),
-				pages: fileInfo.pages,
+			const pageResults = {
+				['common']: {
+					file, strict: argv.strict ?? false,
+					timestamp: new Date().toISOString(),
+					pages: fileInfo.pages,
+				},
 			};
 
 			const pageIdRegexp = /page-(\d+)\.png$/;
@@ -316,7 +316,7 @@ try {
 						 * These lines are usually directly below the barcode, but can be to either side or above it
 						 * (Highly dependent on the PDFs overall quality...)
 						 */
-						let label = ((barcode, bbox, textLines) => {
+						const label = ((barcode, bbox, textLines) => {
 							if (argv.debug) console.debug(`Detecting label of barcode '${barcode.text.trim()}'...`);
 
 							// Maximum center point distance: 25% of longest page dimension; minimum distance: nearest edge of barcode
